@@ -3,66 +3,101 @@
 /**
  * Module dependencies.
  */
-
 var app = require('../app');
 var debug = require('debug')('trickle-backend:server');
 var http = require('http');
+const { Server } = require("socket.io");
+const jwt = require('jsonwebtoken');
+const liveApps = require('../state/live-apps');
 
 /**
  * Get port from environment and store in Express.
  */
-
 var port = normalizePort(process.env.PORT || '3000');
 app.set('port', port);
 
 /**
  * Create HTTP server.
  */
-
 var server = http.createServer(app);
+
+/**
+ * Create Socket.IO server and attach it to the HTTP server.
+ * We enable CORS for all origins for development purposes.
+ */
+const io = new Server(server, {
+  cors: {
+    origin: "*", // Allow all origins for now
+    methods: ["GET", "POST"]
+  }
+});
+
+/**
+ * Socket.IO Authentication Middleware.
+ * This runs for every incoming connection.
+ */
+io.use((socket, next) => {
+  // The frontend must send the token in the `auth` object during connection.
+  const token = socket.handshake.auth.token;
+
+  if (!token) {
+    return next(new Error('Authentication error: Token not provided'));
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return next(new Error('Authentication error: Invalid token'));
+    }
+    // Attach user information to the socket object for future use.
+    socket.user = decoded.user;
+    next();
+  });
+});
+
+/**
+ * Socket.IO Connection Handler.
+ * This runs after a client has been successfully authenticated.
+ */
+io.on('connection', (socket) => {
+  console.log(`User connected: ${socket.user.email}`);
+
+  // Listen for 'update-app' event from the client
+  socket.on('update-app', (data) => {
+    if (data && data.appName) {
+      const appName = data.appName;
+      console.log(`User ${socket.user.email} is now using: ${appName}`);
+      // Store the current app in our in-memory state
+      liveApps.set(socket.user.email, appName);
+    }
+  });
+
+  // Handle disconnection
+  socket.on('disconnect', () => {
+    console.log(`User disconnected: ${socket.user.email}`);
+    // Clean up the state when the user disconnects
+    liveApps.delete(socket.user.email);
+  });
+});
 
 /**
  * Listen on provided port, on all network interfaces.
  */
-
 server.listen(port);
 server.on('error', onError);
 server.on('listening', onListening);
 
-/**
- * Normalize a port into a number, string, or false.
- */
+// ... (The rest of the original file remains the same)
 
 function normalizePort(val) {
   var port = parseInt(val, 10);
-
-  if (isNaN(port)) {
-    // named pipe
-    return val;
-  }
-
-  if (port >= 0) {
-    // port number
-    return port;
-  }
-
+  if (isNaN(port)) { return val; }
+  if (port >= 0) { return port; }
   return false;
 }
 
-/**
- * Event listener for HTTP server "error" event.
- */
-
 function onError(error) {
-  if (error.syscall !== 'listen') {
-    throw error;
-  }
-
-  var bind = typeof port === 'string'
-    ? 'Pipe ' + port
-    : 'Port ' + port;
-
-  // handle specific listen errors with friendly messages
+  if (error.syscall !== 'listen') { throw error; }
+  var bind = typeof port === 'string' ? 'Pipe ' + port : 'Port ' + port;
   switch (error.code) {
     case 'EACCES':
       console.error(bind + ' requires elevated privileges');
@@ -77,14 +112,8 @@ function onError(error) {
   }
 }
 
-/**
- * Event listener for HTTP server "listening" event.
- */
-
 function onListening() {
   var addr = server.address();
-  var bind = typeof addr === 'string'
-    ? 'pipe ' + addr
-    : 'port ' + addr.port;
+  var bind = typeof addr === 'string' ? 'pipe ' + addr : 'port ' + addr.port;
   debug('Listening on ' + bind);
 }
