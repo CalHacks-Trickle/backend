@@ -41,7 +41,7 @@ const io = new Server(server, { cors: { origin: "*" } });
  * Socket.IO Authentication Middleware.
  */
 io.use((socket, next) => {
-  const token = socket.handshake.auth.token; // Correctly read from the 'auth' object
+  const token = socket.handshake.query.token; // Correctly read from the 'auth' object
   if (!token) {
     return next(new Error('Authentication error: Token not provided'));
   }
