@@ -11,7 +11,7 @@ async function aggregateDataForUser(userEmail, date) {
     const userUsage = await DailyUsage.getForDay(userEmail, date);
 
     if (userUsage.length === 0) {
-        console.log(`No usage data for ${userEmail} on ${date}.`);
+        // This is normal, just means the user wasn't active.
         return;
     }
 
@@ -32,7 +32,6 @@ async function aggregateDataForUser(userEmail, date) {
 
 /**
  * Main aggregation job.
- * Fetches all users and processes them one by one to avoid quota limits.
  */
 async function runDailyAggregation(date) {
     console.log(`Starting daily aggregation for date: ${date}`);
@@ -44,16 +43,23 @@ async function runDailyAggregation(date) {
     }
 
     for (const user of allUsers) {
-        try {
-            await aggregateDataForUser(user.email, date);
-        } catch (error) {
-            console.error(`Failed to aggregate data for user ${user.email}:`, error);
+        // FIX 1: Add a guard to ensure the user object and email are valid
+        if (user && user.email) {
+            try {
+                await aggregateDataForUser(user.email, date);
+            } catch (error) {
+                console.error(`Failed to aggregate data for user ${user.email}:`, error);
+            }
+        } else {
+            console.warn("Skipping malformed user record:", user);
         }
     }
 
-    // After processing all users, delete the detailed records for that day.
-    console.log(`Finished aggregating data. Now deleting detailed records for ${date}...`);
-    await DailyUsage.deleteForDay(date);
+    console.log(`Finished aggregating data for ${date}.`);
+
+    // FIX 2: Disable data deletion as requested.
+    // console.log(`Data cleanup for ${date} is disabled for now.`);
+    // await DailyUsage.deleteForDay(date);
 }
 
 function scheduleDailyAggregation() {
