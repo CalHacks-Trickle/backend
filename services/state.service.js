@@ -53,13 +53,6 @@ async function buildStatusPayload(userEmail, classification) {
     appUsage.distraction.apps.sort((a, b) => b.time - a.time);
 
     const payload = {
-        garden: {
-            tree: {
-                level: 2,
-                health: 95.5,
-                progressToNextLevel: 67.3
-            }
-        },
         currentState: classification || 'distracting',
         sessionSummary,
         appUsage
