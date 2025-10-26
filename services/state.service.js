@@ -1,12 +1,57 @@
 
+const DailyUsage = require('../models/daily-usage.model.js');
+
 /**
- * Builds the detailed status payload to be sent to the client.
- * @param {string} classification - The user's current state ('focusing' or 'distracting').
- * @returns {object} The full status object for the client.
+ * Builds the detailed status payload with real data for the user.
+ * @param {string} userEmail - The email of the user to build the payload for.
+ * @param {string} classification - The user's current app's classification.
+ * @returns {Promise<object>} The full status object for the client.
  */
-function buildStatusPayload(classification) {
-    // For now, we use the provided example data for unimplemented fields.
-    // In the future, this function would calculate these values based on user activity logs.
+async function buildStatusPayload(userEmail, classification) {
+    const today = new Date().toISOString().split('T')[0];
+    const usageRecords = await DailyUsage.getForDay(userEmail, today);
+
+    const sessionSummary = {
+        totalFocusTime: 0,
+        totalDistractionTime: 0,
+        longestFocusStreak: 0, // This logic is not yet implemented
+        lastUpdated: new Date().toISOString()
+    };
+
+    const appUsage = {
+        focus: { totalTime: 0, apps: [] },
+        distraction: { totalTime: 0, apps: [] }
+    };
+
+    const appTimeMap = {};
+
+    for (const record of usageRecords) {
+        const { appName, classification: recordClassification, duration } = record;
+
+        if (recordClassification === 'focusing') {
+            sessionSummary.totalFocusTime += duration;
+        } else {
+            sessionSummary.totalDistractionTime += duration;
+        }
+
+        if (!appTimeMap[appName]) {
+            appTimeMap[appName] = { name: appName, time: 0, classification: recordClassification };
+        }
+        appTimeMap[appName].time += duration;
+    }
+
+    // Convert the map to the final array structure for appUsage
+    for (const appName in appTimeMap) {
+        const appData = appTimeMap[appName];
+        const category = appData.classification === 'focusing' ? 'focus' : 'distraction';
+        appUsage[category].apps.push({ name: appData.name, time: appData.time });
+        appUsage[category].totalTime += appData.time;
+    }
+
+    // Sort apps by time spent
+    appUsage.focus.apps.sort((a, b) => b.time - a.time);
+    appUsage.distraction.apps.sort((a, b) => b.time - a.time);
+
     const payload = {
         garden: {
             tree: {
@@ -15,30 +60,9 @@ function buildStatusPayload(classification) {
                 progressToNextLevel: 67.3
             }
         },
-        currentState: classification || 'focusing', // Default to focusing if null
-        sessionSummary: {
-            totalFocusTime: 7200,
-            totalDistractionTime: 900,
-            longestFocusStreak: 3600,
-            lastUpdated: new Date().toISOString()
-        },
-        appUsage: {
-            focus: {
-                totalTime: 7200,
-                apps: [
-                    { "name": "Visual Studio Code", "time": 5400 },
-                    { "name": "iTerm2", "time": 1200 },
-                    { "name": "Figma", "time": 600 }
-                ]
-            },
-            distraction: {
-                totalTime: 900,
-                apps: [
-                    { "name": "Slack", "time": 600 },
-                    { "name": "X", "time": 300 }
-                ]
-            }
-        }
+        currentState: classification || 'distracting',
+        sessionSummary,
+        appUsage
     };
 
     return payload;

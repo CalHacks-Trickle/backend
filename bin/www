@@ -21,27 +21,16 @@ const DailyUsage = require('../models/daily-usage.model.js');
 // Scheduled Jobs
 const { scheduleDailyAggregation } = require('../jobs/daily-aggregation.js');
 
-/**
- * Get port from environment and store in Express.
- */
 var port = normalizePort(process.env.PORT || '3000');
 app.set('port', port);
-
-/**
- * Create HTTP server.
- */
 var server = http.createServer(app);
-
-/**
- * Create Socket.IO server.
- */
 const io = new Server(server, { cors: { origin: "*" } });
 
 /**
  * Socket.IO Authentication Middleware.
  */
 io.use((socket, next) => {
-  const token = socket.handshake.query.token; // Correctly read from the 'auth' object
+  const token = socket.handshake.query.token;
   if (!token) {
     return next(new Error('Authentication error: Token not provided'));
   }
@@ -54,10 +43,6 @@ io.use((socket, next) => {
   });
 });
 
-/**
- * Records the duration of the previous app usage.
- * @param {string} userEmail - The user's email.
- */
 async function recordPreviousAppUsage(userEmail) {
     const previousSession = liveSessions.get(userEmail);
     if (previousSession) {
@@ -69,21 +54,19 @@ async function recordPreviousAppUsage(userEmail) {
                 previousSession.classification,
                 durationInSeconds
             );
-            console.log(`Recorded ${durationInSeconds}s for ${previousSession.appName} for user ${userEmail}`);
         }
     }
 }
 
-/**
- * Socket.IO Connection Handler.
- */
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.user.email}`);
 
-  const statusInterval = setInterval(() => {
+  const statusInterval = setInterval(async () => {
     const liveSession = liveSessions.get(socket.user.email);
     const classification = liveSession ? liveSession.classification : 'distracting';
-    socket.emit('status-updated', buildStatusPayload(classification));
+    // UPDATE: Await the async function and pass the user's email
+    const payload = await buildStatusPayload(socket.user.email, classification);
+    socket.emit('status-updated', payload);
   }, 300000);
 
   socket.on('update-app', async (data) => {
@@ -100,7 +83,10 @@ io.on('connection', (socket) => {
         }
 
         liveSessions.set(socket.user.email, { appName, classification, startTime: new Date() });
-        socket.emit('status-updated', buildStatusPayload(classification));
+        
+        // UPDATE: Await the async function and pass the user's email
+        const payload = await buildStatusPayload(socket.user.email, classification);
+        socket.emit('status-updated', payload);
       }
     } catch (error) {
         console.error("[WebSocket Error] Failed to process 'update-app' event:", error);
@@ -109,21 +95,17 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', async () => {
     console.log(`User disconnected: ${socket.user.email}`);
-    await recordPreviousAppUsage(socket.user.email); // Record the final app usage before disconnect
+    await recordPreviousAppUsage(socket.user.email);
     liveSessions.delete(socket.user.email);
     clearInterval(statusInterval);
   });
 });
 
-/**
- * Start the server and scheduled jobs.
- */
 server.listen(port);
 server.on('error', onError);
 server.on('listening', onListening);
-scheduleDailyAggregation(); // Start the daily cron job
+scheduleDailyAggregation();
 
-// ... (rest of the file is the same)
 function normalizePort(val) {
   var port = parseInt(val, 10);
   if (isNaN(port)) { return val; }
