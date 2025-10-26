@@ -11,6 +11,7 @@ const jwt = require('jsonwebtoken');
 const liveApps = require('../state/live-apps');
 const AppClassification = require('../models/app-classification.model.js');
 const { classifyApp } = require('../services/groq.service.js');
+const { buildStatusPayload } = require('../services/state.service.js');
 
 /**
  * Get port from environment and store in Express.
@@ -56,7 +57,17 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.user.email}`);
 
-  // Listen for 'update-app' event from the client
+  // --- Periodic Status Update --- 
+  // Set up a timer to send status updates every 5 minutes.
+  const statusInterval = setInterval(() => {
+    const liveAppInfo = liveApps.get(socket.user.email);
+    const classification = liveAppInfo ? liveAppInfo.classification : 'distracting';
+    const payload = buildStatusPayload(classification);
+    socket.emit('status-updated', payload);
+    console.log(`Sent periodic 'status-updated' to ${socket.user.email}`);
+  }, 300000); // 5 minutes in milliseconds
+
+  // --- App Update Handler ---
   socket.on('update-app', async (data) => {
     try {
       if (data && data.appName) {
@@ -65,9 +76,7 @@ io.on('connection', (socket) => {
 
         let classification = await AppClassification.get(appName);
 
-        if (classification) {
-          console.log(`Classification for '${appName}' found in DB: '${classification}'`);
-        } else {
+        if (!classification) {
           console.log(`'${appName}' not found in DB. Classifying with Groq...`);
           classification = await classifyApp(appName);
           console.log(`Groq classified '${appName}' as: '${classification}'`);
@@ -75,16 +84,23 @@ io.on('connection', (socket) => {
         }
 
         liveApps.set(socket.user.email, { appName, classification });
+
+        // Immediately send the detailed status update to the client
+        const payload = buildStatusPayload(classification);
+        socket.emit('status-updated', payload);
+        console.log(`Sent immediate 'status-updated' to ${socket.user.email} for new app`);
       }
     } catch (error) {
         console.error("[WebSocket Error] Failed to process 'update-app' event:", error);
     }
   });
 
-  // Handle disconnection
+  // --- Disconnect Handler ---
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.user.email}`);
+    // Clean up the user's state and timers
     liveApps.delete(socket.user.email);
+    clearInterval(statusInterval); // IMPORTANT: Stop the timer to prevent memory leaks
   });
 });
 
@@ -95,7 +111,6 @@ server.listen(port);
 server.on('error', onError);
 server.on('listening', onListening);
 
-// ... (The rest of the original file remains the same)
 
 function normalizePort(val) {
   var port = parseInt(val, 10);
