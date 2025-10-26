@@ -57,7 +57,7 @@ io.on('connection', (socket) => {
     const classification = liveSession ? liveSession.classification : 'distracting';
     const payload = await buildStatusPayload(socket.user.email, classification);
     socket.emit('status-updated', payload);
-  }, 2000);
+  }, 1000);
 
   socket.on('update-app', async (data) => {
     try {
