@@ -1,34 +1,25 @@
 #!/usr/bin/env node
 
-/**
- * Module dependencies.
- */
 var app = require('../app');
 var debug = require('debug')('trickle-backend:server');
 var http = require('http');
 const { Server } = require("socket.io");
 const jwt = require('jsonwebtoken');
 
-// State and Services
 const liveSessions = require('../state/live-sessions');
 const { buildStatusPayload } = require('../services/state.service.js');
 const { classifyApp } = require('../services/groq.service.js');
-
-// Database Models
 const AppClassification = require('../models/app-classification.model.js');
 const DailyUsage = require('../models/daily-usage.model.js');
 
-// Scheduled Jobs
-const { scheduleDailyAggregation } = require('../jobs/daily-aggregation.js');
+// UPDATE: Import the renamed job scheduler
+const { scheduleDailyJob } = require('../jobs/daily-aggregation.js');
 
 var port = normalizePort(process.env.PORT || '3000');
 app.set('port', port);
 var server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
-/**
- * Socket.IO Authentication Middleware.
- */
 io.use((socket, next) => {
   const token = socket.handshake.query.token;
   if (!token) {
@@ -64,7 +55,6 @@ io.on('connection', (socket) => {
   const statusInterval = setInterval(async () => {
     const liveSession = liveSessions.get(socket.user.email);
     const classification = liveSession ? liveSession.classification : 'distracting';
-    // UPDATE: Await the async function and pass the user's email
     const payload = await buildStatusPayload(socket.user.email, classification);
     socket.emit('status-updated', payload);
   }, 300000);
@@ -73,18 +63,13 @@ io.on('connection', (socket) => {
     try {
       if (data && data.appName) {
         await recordPreviousAppUsage(socket.user.email);
-
         const appName = data.appName;
         let classification = await AppClassification.get(appName);
-
         if (!classification) {
           classification = await classifyApp(appName);
           await AppClassification.save(appName, classification);
         }
-
         liveSessions.set(socket.user.email, { appName, classification, startTime: new Date() });
-        
-        // UPDATE: Await the async function and pass the user's email
         const payload = await buildStatusPayload(socket.user.email, classification);
         socket.emit('status-updated', payload);
       }
@@ -104,7 +89,9 @@ io.on('connection', (socket) => {
 server.listen(port);
 server.on('error', onError);
 server.on('listening', onListening);
-scheduleDailyAggregation();
+
+// UPDATE: Call the renamed job scheduler
+scheduleDailyJob();
 
 function normalizePort(val) {
   var port = parseInt(val, 10);

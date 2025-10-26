@@ -1,83 +1,42 @@
 
 const cron = require('node-cron');
 const DailyUsage = require('../models/daily-usage.model.js');
-const UserSummary = require('../models/user-summary.model.js');
-const User = require('../models/user.model.js');
 
 /**
- * Aggregates one user's daily data.
+ * The main job to run daily. It clears out the previous day's detailed usage logs.
+ * @param {string} date - The date to process, in YYYY-MM-DD format.
  */
-async function aggregateDataForUser(userEmail, date) {
-    const userUsage = await DailyUsage.getForDay(userEmail, date);
-
-    if (userUsage.length === 0) {
-        // This is normal, just means the user wasn't active.
-        return;
+async function runDailyCleanup(date) {
+    console.log(`Starting daily cleanup for date: ${date}`);
+    try {
+        await DailyUsage.deleteForDay(date);
+    } catch (error) {
+        console.error(`Failed to delete usage data for date ${date}:`, error);
     }
-
-    let totalFocusTime = 0;
-    let totalDistractionTime = 0;
-
-    for (const record of userUsage) {
-        if (record.classification === 'focusing') {
-            totalFocusTime += record.duration;
-        } else {
-            totalDistractionTime += record.duration;
-        }
-    }
-
-    await UserSummary.upsert(userEmail, date, totalFocusTime, totalDistractionTime);
-    console.log(`Saved summary for ${userEmail} on ${date}: Focus=${totalFocusTime}s, Distraction=${totalDistractionTime}s`);
 }
 
 /**
- * Main aggregation job.
+ * Schedules the daily cleanup job.
  */
-async function runDailyAggregation(date) {
-    console.log(`Starting daily aggregation for date: ${date}`);
-    
-    const allUsers = await User.getAll();
-    if (allUsers.length === 0) {
-        console.log("No users found to process.");
-        return;
-    }
-
-    for (const user of allUsers) {
-        // FIX 1: Add a guard to ensure the user object and email are valid
-        if (user && user.email) {
-            try {
-                await aggregateDataForUser(user.email, date);
-            } catch (error) {
-                console.error(`Failed to aggregate data for user ${user.email}:`, error);
-            }
-        } else {
-            console.warn("Skipping malformed user record:", user);
-        }
-    }
-
-    console.log(`Finished aggregating data for ${date}.`);
-
-    // FIX 2: Disable data deletion as requested.
-    // console.log(`Data cleanup for ${date} is disabled for now.`);
-    // await DailyUsage.deleteForDay(date);
-}
-
-function scheduleDailyAggregation() {
-    cron.schedule('*/2 * * * *', () => {
+function scheduleDailyJob() {
+    // Schedule to run every day at 00:00 (midnight) UTC.
+    cron.schedule('0 0 * * *', () => {
+        // Calculate yesterday's date to ensure we are cleaning up completed days.
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
         const dateString = yesterday.toISOString().split('T')[0];
         
-        console.log(`Triggering aggregation job for date: ${dateString}`);
-        runDailyAggregation(dateString).catch(err => {
-            console.error("Error during scheduled aggregation:", err);
+        console.log(`Triggering daily cleanup job for date: ${dateString}`);
+        runDailyCleanup(dateString).catch(err => {
+            console.error("Error during scheduled cleanup:", err);
         });
     }, {
         scheduled: true,
         timezone: "UTC"
     });
 
-    console.log("Scheduled daily aggregation job to run every 2 minutes (for testing).");
+    console.log("Scheduled daily cleanup job to run at midnight UTC.");
 }
 
-module.exports = { scheduleDailyAggregation };
+// The function name is changed to reflect its new purpose.
+module.exports = { scheduleDailyJob };

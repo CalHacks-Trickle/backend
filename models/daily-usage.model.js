@@ -38,38 +38,26 @@ async function getUsageForDay(userEmail, date) {
                 { "date": { "$eq": date } }
             ]
         },
-        // FIX: Reduce limit to be within the cloud quota (300)
         limit: 300
     });
     return results.metadatas || [];
 }
 
-async function getAllUsageForDate(date) {
-    const collection = await getUsageCollection();
-    const results = await collection.get({
-        where: { "date": { "$eq": date } },
-        limit: 100000
-    });
-    return results.metadatas || [];
-}
-
+/**
+ * Deletes all usage records for a given date using a direct where-filter.
+ * This is more efficient and avoids quota errors.
+ * @param {string} date - The date in YYYY-MM-DD format.
+ */
 async function deleteUsageForDay(date) {
     const collection = await getUsageCollection();
-    const recordsToDelete = await collection.get({
-        where: { "date": { "$eq": date } },
-        limit: 100000
-    });
-
-    if (recordsToDelete.ids.length > 0) {
-        await collection.delete({ ids: recordsToDelete.ids });
-        console.log(`Deleted ${recordsToDelete.ids.length} daily usage records for date: ${date}`);
-    }
+    // FIX: Use a direct delete with a 'where' clause to avoid fetching first.
+    await collection.delete({ where: { "date": { "$eq": date } } });
+    console.log(`Deleted daily usage records for date: ${date}`);
 }
 
 const DailyUsage = {
     add: addUsage,
     getForDay: getUsageForDay,
-    getAllForDate: getAllUsageForDate,
     deleteForDay: deleteUsageForDay,
 };
 
