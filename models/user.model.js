@@ -45,20 +45,21 @@ async function createUser({ email, password }) {
 }
 
 /**
- * Fetches all users from the collection.
- * @returns {Promise<Array<object>>} A list of all user objects.
+ * Fetches all users from the collection, up to a limit.
+ * @returns {Promise<Array<object>>} A list of user objects.
  */
 async function getAllUsers() {
     const collection = await getUserCollection();
     // The .get() method with no IDs or where clause fetches all records, up to the limit.
-    const results = await collection.get({ limit: 10000 }); // Set a reasonable limit for total users
+    // Limiting to 10 as requested to stay within API quotas for testing.
+    const results = await collection.get({ limit: 10 });
     return results.metadatas || [];
 }
 
 const User = {
     findUserByEmail,
     create: createUser,
-    getAll: getAllUsers, // Expose the new function
+    getAll: getAllUsers,
 };
 
 module.exports = User;
