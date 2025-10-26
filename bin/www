@@ -11,8 +11,6 @@ const { buildStatusPayload } = require('../services/state.service.js');
 const { classifyApp } = require('../services/groq.service.js');
 const AppClassification = require('../models/app-classification.model.js');
 const DailyUsage = require('../models/daily-usage.model.js');
-
-// UPDATE: Import the renamed job scheduler
 const { scheduleDailyJob } = require('../jobs/daily-aggregation.js');
 
 var port = normalizePort(process.env.PORT || '3000');
@@ -21,7 +19,7 @@ var server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
 io.use((socket, next) => {
-  const token = socket.handshake.query.token;
+  const token = socket.handshake.auth.token;
   if (!token) {
     return next(new Error('Authentication error: Token not provided'));
   }
@@ -34,21 +32,6 @@ io.use((socket, next) => {
   });
 });
 
-async function recordPreviousAppUsage(userEmail) {
-    const previousSession = liveSessions.get(userEmail);
-    if (previousSession) {
-        const durationInSeconds = Math.round((new Date() - previousSession.startTime) / 1000);
-        if (durationInSeconds > 0) {
-            await DailyUsage.add(
-                userEmail,
-                previousSession.appName,
-                previousSession.classification,
-                durationInSeconds
-            );
-        }
-    }
-}
-
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.user.email}`);
 
@@ -57,20 +40,43 @@ io.on('connection', (socket) => {
     const classification = liveSession ? liveSession.classification : 'distracting';
     const payload = await buildStatusPayload(socket.user.email, classification);
     socket.emit('status-updated', payload);
-  }, 1000);
+  }, 300000);
 
   socket.on('update-app', async (data) => {
     try {
       if (data && data.appName) {
-        await recordPreviousAppUsage(socket.user.email);
-        const appName = data.appName;
-        let classification = await AppClassification.get(appName);
-        if (!classification) {
-          classification = await classifyApp(appName);
-          await AppClassification.save(appName, classification);
+        // --- Step 1: Handle the PREVIOUS session ---
+        const previousSession = liveSessions.get(socket.user.email);
+        if (previousSession) {
+            const durationInSeconds = Math.round((new Date() - previousSession.startTime) / 1000);
+            if (durationInSeconds > 0) {
+                await DailyUsage.add(
+                    socket.user.email,
+                    previousSession.appName, // Explicitly use previous app's name
+                    previousSession.classification,
+                    durationInSeconds
+                );
+                console.log(`Recorded ${durationInSeconds}s for previous app: ${previousSession.appName}`);
+            }
         }
-        liveSessions.set(socket.user.email, { appName, classification, startTime: new Date() });
-        const payload = await buildStatusPayload(socket.user.email, classification);
+
+        // --- Step 2: Set up the NEW session ---
+        const newAppName = data.appName;
+        let newClassification = await AppClassification.get(newAppName);
+
+        if (!newClassification) {
+            newClassification = await classifyApp(newAppName);
+            await AppClassification.save(newAppName, newClassification);
+        }
+
+        liveSessions.set(socket.user.email, { 
+            appName: newAppName, 
+            classification: newClassification, 
+            startTime: new Date() 
+        });
+        
+        // --- Step 3: Send updated payload ---
+        const payload = await buildStatusPayload(socket.user.email, newClassification);
         socket.emit('status-updated', payload);
       }
     } catch (error) {
@@ -80,7 +86,19 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', async () => {
     console.log(`User disconnected: ${socket.user.email}`);
-    await recordPreviousAppUsage(socket.user.email);
+    const lastSession = liveSessions.get(socket.user.email);
+    if (lastSession) {
+        const durationInSeconds = Math.round((new Date() - lastSession.startTime) / 1000);
+        if (durationInSeconds > 0) {
+            await DailyUsage.add(
+                socket.user.email,
+                lastSession.appName,
+                lastSession.classification,
+                durationInSeconds
+            );
+            console.log(`Recorded final ${durationInSeconds}s for ${lastSession.appName}`);
+        }
+    }
     liveSessions.delete(socket.user.email);
     clearInterval(statusInterval);
   });
@@ -89,8 +107,6 @@ io.on('connection', (socket) => {
 server.listen(port);
 server.on('error', onError);
 server.on('listening', onListening);
-
-// UPDATE: Call the renamed job scheduler
 scheduleDailyJob();
 
 function normalizePort(val) {
