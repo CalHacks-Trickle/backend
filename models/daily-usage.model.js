@@ -38,7 +38,8 @@ async function getUsageForDay(userEmail, date) {
                 { "date": { "$eq": date } }
             ]
         },
-        limit: 10000
+        // FIX: Reduce limit to be within the cloud quota (300)
+        limit: 300
     });
     return results.metadatas || [];
 }
@@ -67,7 +68,7 @@ async function deleteUsageForDay(date) {
 
 const DailyUsage = {
     add: addUsage,
-    getForDay: getUsageForDay, // Corrected the typo here
+    getForDay: getUsageForDay,
     getAllForDate: getAllUsageForDate,
     deleteForDay: deleteUsageForDay,
 };
