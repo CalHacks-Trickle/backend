@@ -53,7 +53,7 @@ function verifyClassification() {
     req.end();
 }
 
-const socket = io("http://localhost:3000", { auth: { token: JWT_TOKEN } });
+const socket = io("http://20.172.68.176:3000", { auth: { token: JWT_TOKEN } });
 
 socket.on("connect", () => {
     console.log("✅ Connected to server successfully!");
