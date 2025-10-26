@@ -8,10 +8,18 @@ var debug = require('debug')('trickle-backend:server');
 var http = require('http');
 const { Server } = require("socket.io");
 const jwt = require('jsonwebtoken');
-const liveApps = require('../state/live-apps');
-const AppClassification = require('../models/app-classification.model.js');
-const { classifyApp } = require('../services/groq.service.js');
+
+// State and Services
+const liveSessions = require('../state/live-sessions');
 const { buildStatusPayload } = require('../services/state.service.js');
+const { classifyApp } = require('../services/groq.service.js');
+
+// Database Models
+const AppClassification = require('../models/app-classification.model.js');
+const DailyUsage = require('../models/daily-usage.model.js');
+
+// Scheduled Jobs
+const { scheduleDailyAggregation } = require('../jobs/daily-aggregation.js');
 
 /**
  * Get port from environment and store in Express.
@@ -27,19 +35,13 @@ var server = http.createServer(app);
 /**
  * Create Socket.IO server.
  */
-const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
 /**
  * Socket.IO Authentication Middleware.
  */
 io.use((socket, next) => {
-  const token = socket.handshake.query.token;
-  console.log('Auth payload received:', socket.handshake.query.token);
+  const token = socket.handshake.auth.token; // Correctly read from the 'auth' object
   if (!token) {
     return next(new Error('Authentication error: Token not provided'));
   }
@@ -53,66 +55,75 @@ io.use((socket, next) => {
 });
 
 /**
+ * Records the duration of the previous app usage.
+ * @param {string} userEmail - The user's email.
+ */
+async function recordPreviousAppUsage(userEmail) {
+    const previousSession = liveSessions.get(userEmail);
+    if (previousSession) {
+        const durationInSeconds = Math.round((new Date() - previousSession.startTime) / 1000);
+        if (durationInSeconds > 0) {
+            await DailyUsage.add(
+                userEmail,
+                previousSession.appName,
+                previousSession.classification,
+                durationInSeconds
+            );
+            console.log(`Recorded ${durationInSeconds}s for ${previousSession.appName} for user ${userEmail}`);
+        }
+    }
+}
+
+/**
  * Socket.IO Connection Handler.
  */
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.user.email}`);
 
-  // --- Periodic Status Update --- 
-  // Set up a timer to send status updates every 5 minutes.
   const statusInterval = setInterval(() => {
-    const liveAppInfo = liveApps.get(socket.user.email);
-    const classification = liveAppInfo ? liveAppInfo.classification : 'distracting';
-    const payload = buildStatusPayload(classification);
-    socket.emit('status-updated', payload);
-    console.log(`Sent periodic 'status-updated' to ${socket.user.email}`);
-  }, 300000); // 5 minutes in milliseconds
+    const liveSession = liveSessions.get(socket.user.email);
+    const classification = liveSession ? liveSession.classification : 'distracting';
+    socket.emit('status-updated', buildStatusPayload(classification));
+  }, 300000);
 
-  // --- App Update Handler ---
   socket.on('update-app', async (data) => {
     try {
       if (data && data.appName) {
-        const appName = data.appName;
-        console.log(`User ${socket.user.email} is now using: ${appName}`);
+        await recordPreviousAppUsage(socket.user.email);
 
+        const appName = data.appName;
         let classification = await AppClassification.get(appName);
 
         if (!classification) {
-          console.log(`'${appName}' not found in DB. Classifying with Groq...`);
           classification = await classifyApp(appName);
-          console.log(`Groq classified '${appName}' as: '${classification}'`);
           await AppClassification.save(appName, classification);
         }
 
-        liveApps.set(socket.user.email, { appName, classification });
-
-        // Immediately send the detailed status update to the client
-        const payload = buildStatusPayload(classification);
-        socket.emit('status-updated', payload);
-        console.log(`Sent immediate 'status-updated' to ${socket.user.email} for new app`);
+        liveSessions.set(socket.user.email, { appName, classification, startTime: new Date() });
+        socket.emit('status-updated', buildStatusPayload(classification));
       }
     } catch (error) {
         console.error("[WebSocket Error] Failed to process 'update-app' event:", error);
     }
   });
 
-  // --- Disconnect Handler ---
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     console.log(`User disconnected: ${socket.user.email}`);
-    // Clean up the user's state and timers
-    liveApps.delete(socket.user.email);
-    clearInterval(statusInterval); // IMPORTANT: Stop the timer to prevent memory leaks
+    await recordPreviousAppUsage(socket.user.email); // Record the final app usage before disconnect
+    liveSessions.delete(socket.user.email);
+    clearInterval(statusInterval);
   });
 });
 
 /**
- * Listen on provided port, on all network interfaces.
+ * Start the server and scheduled jobs.
  */
 server.listen(port);
 server.on('error', onError);
 server.on('listening', onListening);
+scheduleDailyAggregation(); // Start the daily cron job
 
-
+// ... (rest of the file is the same)
 function normalizePort(val) {
   var port = parseInt(val, 10);
   if (isNaN(port)) { return val; }
